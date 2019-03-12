@@ -4,7 +4,7 @@ all:
 	make exploit
 
 exploit:
-	cd payload; make; cp payload.bin ../stage2/payload.bin
+	cd payload; make; rm ../stage2/payload.bin.gz; gzip -9 -n -c payload.bin > ../stage2/payload.bin.gz
 	cd stage2; make
 	cd stage1; make
 	./scripts/obfuscate.py stage1/stage1.bin 1
@@ -28,7 +28,7 @@ clean:
 	-rm bootstrap/res/henkaku.skprx
 	-rm bootstrap/res/henkaku.suprx
 	-rm payload/bootstrap.h
-	-rm stage2/payload.bin
+	-rm stage2/payload.bin.gz
 	cd payload; make clean
 	cd stage2; make clean
 	cd stage1; make clean

